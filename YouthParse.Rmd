@@ -1,0 +1,385 @@
+---
+title: "YouthParse"
+author: "Hanisha"
+date: "2023-04-06"
+output:
+  html_document: default
+  word_document: default
+---
+
+```{r}
+library(tidyverse)
+library(tree)
+library(dplyr)
+library(grid)
+
+library ( knitr ) 
+library ( randomForest )
+```
+
+```{r}
+load(".../NSDUH_2020.RData")
+
+```
+
+
+```{r}
+dfo <- NSDUH_2020[!is.na(NSDUH_2020$schfelt),] 
+
+```
+
+```{r}
+substance_cols <- c(   # quantitative values for frequency of use
+                       'iralcfy', # alcohol frequency past year (1-365)
+                       'irmjfy', # marijuana frequency past year (1-365)
+                       'ircigfm', #cigarette frequency past month (1-30)
+                       'IRSMKLSS30N', # smokeless tobacco frequency past month (1-30)
+                       'iralcfm', # alcohol frequency past month (1-30)
+                       'irmjfm', # marijuana frequency past month (1-30)
+                       
+                       # quantitative values for age of first use
+                       'ircigage', # cigarette age of first use (1-55), 991=never used
+                       'irsmklsstry', # smokeless tobacco age of first use (1-70), 991=never used
+                       'iralcage', # alcohol age of first use (1-66), 991=never used
+                       'irmjage', # marijuana age of first use (1-83), 991=never used
+                       
+                       # binary categories for use at all
+                       'mrjflag', # marijuana ever used (0=never, 1=ever)
+                       'alcflag', # alcohol ever used (0=never, 1=ever)
+                       'tobflag', # any tobacco ever used (0=never, 1=ever)
+                       
+                       # multiclass categories for frequency of use 
+                       'alcydays', # number of days of alcohol in past year (1-5 categories, 6=none)
+                       'mrjydays', # number of days of marijuana in past year (1-5 categories, 6=none)
+                       'alcmdays', # number of days of alcohol in past month (1-4 categories, 5=none)
+                       'mrjmdays', # number of days of marijuana in past month (1-4 categories, 5=none)
+                       'cigmdays', # number of days of cigarettes in past month (1-5 categories, 6=none)
+                       'smklsmdays' # number of days of smokeless tobacco in past month (1-4 categories, 5=none)
+                      )
+
+
+```
+
+
+```{r}
+demographic_cols <- c(
+                  'irsex', # binary sex (1=male, 2=female)
+                  'NEWRACE2', # race (7 categories)
+                  'HEALTH2', # overall health (4 categories)
+                  'eduschlgo', # now going to school (1=yes, 2=no)
+                  'EDUSCHGRD2', # what grade in now/will be in (11 categories, 98,99= blank/skip)
+                  'eduskpcom', #how many days skipped school in past month (1-30, 94/97/98/99=blank/skip)
+                  'imother', # for youth, mother in household (1=yes, 2=no, 3=don't know, 4=over 18)
+                  'ifather', # for youth, father in household (1=yes, 2=no, 3=don't know, 4=over 18)
+                  'income', # total family income (4 categories)
+                  'govtprog', # got gov assistance (1=yes, 2=no)
+                  'POVERTY3', # poverty level (4 categories)
+                  'PDEN10', # population density (1= >1M people, 2=<1M people, 3=can't be determined)
+                  'COUTYP4' # metro size status (1=large metro, 2=small metro, 3=nonmetro)
+                  )
+```
+
+# select columns of interest
+```{r}
+df_youth <- dfo %>% select(schfelt:rlgfrnd) # use all youth questions, start with schfelt and go through rlgfrnd
+df_substance <- dfo %>% select(substance_cols) # select specific substance columns of interest
+df_demog <- dfo %>% select(demographic_cols)  # select specific demographic columns of interest
+```
+
+# combine into one data frame
+```{r}
+df = cbind(df_substance, df_youth, df_demog) #combine into one data frame
+```
+
+# Fix metadata ------------------------------------------------------------
+
+# make vector of columns from the data that should be converted to factors, unordered and ordered
+```{r}
+unordered_factor_cols <- c(names(df_youth), # all columns from youth
+                           'mrjflag','alcflag','tobflag', # binary flag columns from substance
+                           'irsex','NEWRACE2','eduschlgo','imother','ifather','govtprog','PDEN10','COUTYP4' # unordered categories for demographics
+                           ) 
+ordered_factor_cols <- c('EDUSCHGRD2','HEALTH2','POVERTY3','income')
+```
+
+
+# convert to factors
+```{r}
+df[unordered_factor_cols] <- lapply(df[unordered_factor_cols], factor) # correct columns to unordered factors (e.g. yes, no)
+df[ordered_factor_cols] <- lapply(df[ordered_factor_cols], factor, ordered=TRUE) # correct columns to ordered factors (e.g. small, medium, large)
+```
+
+# fix variable label metadata to only include the selected columns
+```{r}
+new_labels <- attr(dfo,'var.labels')[match(names(df), attr(dfo,'names'))]
+attr(df,'var.labels') <- new_labels
+```
+
+
+# note: use attr(df,'var.labels') to see the labeled data
+
+```{r}
+youth_experience_cols = names(df_youth)
+save(df, youth_experience_cols, substance_cols, demographic_cols, file = 'youth_data.Rdata')
+```
+
+```{r}
+youth_data <- df 
+```
+
+
+```{r}
+youth_data <- youth_data %>%
+  mutate(ircigfm = ifelse(ircigfm == 91 | ircigfm == 93, 0, ircigfm),
+         iralcfy = ifelse(iralcfy == 991 | iralcfy == 993, 0, iralcfy),
+         irsmklsstry = ifelse(irsmklsstry == 991, 0, irsmklsstry),
+         iralcage = ifelse(iralcage == 991, 0, iralcage),
+         irmjfy = ifelse(irmjfy == 991 | irmjfy == 993, 0, irmjfy),
+         ircigage = ifelse(ircigage == 991, 0, ircigage),
+         irmjage = ifelse(irmjage == 991, 0, irmjage),
+         IRSMKLSS30N = ifelse(IRSMKLSS30N == 91 | IRSMKLSS30N == 93, 0, IRSMKLSS30N),
+         irmjfm = ifelse(irmjfm == 91 | irmjfm == 93, 0, irmjfm),
+         iralcfm = ifelse(iralcfm == 91 | iralcfm == 93, 0, as.integer(iralcfm)),
+         NEWRACE2 = recode_factor(NEWRACE2, 
+                                  '1' = "NonHisp White", 
+                                  '2' = "NonHisp Black/Afr Am", 
+                                  '3' = "NonHisp Native Am/AK Native", 
+                                  '4' = "NonHisp Native HI/Other Pac", 
+                                  '5' = "NonHisp Asian", 
+                                  '6' = "NonHisp more than one race", 
+                                  '7' = "Hispanic"),
+         irsex = recode_factor(irsex, 
+                               '1' = "Male", 
+                               '2' = "Female"),
+         HEALTH2 = recode_factor(HEALTH2, 
+                                  '1' = "Excellent", 
+                                  '2' = "Very Good", 
+                                  '3' = "Good", 
+                                  '4' = "Fair/Poor"),
+         eduschlgo = ifelse(eduschlgo == 1, 1, ifelse(eduschlgo == 2, 2, NA)),
+         ifather = recode_factor(ifather, 
+                                  '1' = "Yes", 
+                                  '2' = "No", 
+                                  '3' = "NA"),
+         imother = recode_factor(imother, 
+                                  '1' = "Yes", 
+                                  '2' = "No", 
+                                  '3' = "NA"),
+         alcmdays = recode_factor(alcmdays, 
+                                   '1' = "1-2 Days", 
+                                   '2' = "3-5 Days", 
+                                   '3' = "6-19 Days", 
+                                   '4' = "20-30 Days", 
+                                   '5' = "Non-User"),
+         mrjflag = recode_factor(mrjflag, 
+                                  '0' = "NeverUsed", 
+                                  '1' = "EverUsed"),
+         income = recode_factor(income, 
+                                  '1' = "Less than $20,000", 
+                                  '2' = "$20,000 - $49,999", 
+                                  '3' = "$50,000 - $74,999",
+                                  '4' = "$75,000 or More"))%>%
+  filter(!is.na(imother) & !is.na(ifather)) %>%
+  na.omit(youth_data)%>%
+  drop_na()
+
+                                 
+
+```
+
+
+
+#Readable variable names
+
+```{r}
+df_vars <- youth_data[, c("alcmdays", "mrjflag", "ircigfm", "irsmklsstry", "iralcage", "irmjage", "irmjfm", "iralcfm", "NEWRACE2", "irsex", "HEALTH2", "ifather", "imother", "income", "COUTYP4")]
+
+
+colnames(df_vars) <- c("Alcohol_Monthly_Class", "Ever_Used_Marijuana", "Monthly_Smoking_Frequency", "Smokeless_Tobacco_Start_Age", "Alcohol_Start_Age", "Marijuana_Start_Age", "Monthly_Marijuana_Frequency", "Monthly_Alcohol_Frequency", "Race", "Sex", "General_Health_Rank","Father_Presence", "Mother_Presence" , "Income_Group", "Metro_Size")
+
+```
+
+#easy variable retrieval
+
+```{r}
+names(df_vars) <- tolower(names(df_vars))
+
+```
+
+#Split the data into train and test sets
+
+```{r}
+set.seed(1)
+index <- sample(1:nrow(df_vars), nrow(df_vars) * 0.7)
+train.df <- df_vars[index,]
+test.df  <- df_vars[-index,]
+```
+
+#BAGGING
+
+```{r}
+set.seed(1)
+bag.smoke <- randomForest(monthly_smoking_frequency  ~ ., data = train.df,
+     mtry = 14, importance = TRUE)
+bag.smoke
+```
+
+```{r}
+smoke.bag <- predict(bag.smoke, newdata = test.df)
+
+# Calculate the test MSE
+mse <- mean((smoke.bag - test.df$monthly_smoking_frequency)^2)
+mse #  test MSE
+
+plot(smoke.bag, test.df$monthly_smoking_frequency, xlab = "Predicted monthly_smoking_frequency", ylab = "Actual monthly_smoking_frequency", main = "Bagging Results for Monthly Smoking Frequency")
+abline(0, 1)
+
+
+```
+
+```{r}
+importance(bag.smoke)
+```
+
+Here, only considering the variables with higher values for "%IncMSE" and "IncNodePurity" are:
+
+smokeless_tobacco_start_age,alcohol_start_age,marijuana_start_age,monthly_marijuana_frequency,general_health_rank,income_group
+
+#Regression Analysis
+
+```{r}
+imp_vars <- df_vars %>% 
+  select(smokeless_tobacco_start_age, alcohol_start_age, marijuana_start_age, 
+         monthly_marijuana_frequency, general_health_rank, income_group, 
+         monthly_smoking_frequency)
+
+smoke_factors <- randomForest(monthly_smoking_frequency  ~ ., data = train.df %>% select(all_of(colnames(imp_vars))),
+                              mtry = 6, importance = TRUE)
+smoke_factors
+```
+
+```{r}
+smoke.impbag <- predict(smoke_factors, newdata = test.df %>%
+                          select(all_of(colnames(imp_vars))))
+
+# Calculate the test MSE
+mse <- mean((smoke.impbag - test.df$monthly_smoking_frequency)^2)
+mse #  test MSE
+
+plot(smoke.impbag, test.df$monthly_smoking_frequency, xlab = "Predicted monthly_smoking_frequency", ylab = "Actual monthly_smoking_frequency", main = "Bagging Results for Monthly Smoking Frequency")
+abline(0, 1)
+
+
+```
+
+```{r}
+importance(smoke_factors)
+```
+```{r}
+varImpPlot(bag.smoke, main="Variable Importance Plot for Monthly Smoking Frequency")
+```
+
+```{r}
+
+
+# Perform multiple linear regression
+lm_model <- lm(monthly_smoking_frequency ~ smokeless_tobacco_start_age + alcohol_start_age + 
+              marijuana_start_age + monthly_marijuana_frequency + general_health_rank + income_group, 
+            data = imp_vars)
+
+# summary of the regression model
+summary(lm_model)
+
+
+
+```
+
+
+
+
+
+
+
+
+```{r}
+plot(bag.smoke, type = "oob", main="Out-Of-Bag Error Rate Plot")
+```
+
+After about 100 trees, the out-of-bag error rate seems to stabilize and adding more trees does not result in significant improvements in the error rate. This means that we can use 100 trees or more to achieve a good balance between model complexity and predictive performance.
+
+
+#BINARY CLASSIFICATION
+
+```{r}
+drug.tree <- tree(formula = ever_used_marijuana ~ ., 
+                    data = train.df[, -c(which(names(train.df) %in% c("marijuana_start_age", "monthly_marijuana_frequency")))])
+
+summary(drug.tree)
+```
+#plotting the tree
+
+```{r}
+plot(drug.tree)
+text(drug.tree, pretty = 0)
+```
+
+```{r}
+drug.pred <- predict(drug.tree, newdata = test.df , type = "class")
+
+
+table(drug.pred, test.df$ever_used_marijuana)
+
+# Calculate the test MSE
+mse <- mean((drug.pred == test.df$ever_used_marijuana))
+mse #  test MSE
+
+plot(drug.pred, test.df$ever_used_marijuana, xlab = "Predicted ever_used_marijuana", ylab = "Actual ever_used_marijuana")
+abline(0, 1)
+
+
+```
+
+#Multi class
+
+```{r}
+library(gbm)
+library(ggplot2)
+# Use backticks around predictor names in the formula
+boost.alc <- gbm(`alcohol_monthly_class` ~ . - `monthly_alcohol_frequency`, data = train.df,n.trees = 1000,interaction.depth = 5, shrinkage = 0.01,
+                 distribution = "multinomial")
+
+# Make predictions
+y_pred <- predict(boost.alc, newdata = test.df,
+                  n.trees = 1000, type = "response")
+
+# Summary of the GBM model
+summary(boost.alc)
+
+
+```
+
+
+Plot is not accurate due to many predictors, using relative influence from the multi class summary
+
+```{r}
+
+library(ggplot2)
+
+
+alc_class <- data.frame(variable = c("alcohol_start_age", "monthly_marijuana_frequency",
+                           "marijuana_start_age", "general_health_rank","race","income_group",
+                          "metro_size", "smokeless_tobacco_start_age", 
+                          "monthly_smoking_frequency", "sex", "father_presence","ever_used_marijuana",
+                          "mother_presence" ),
+                rel_inf = c(33.80, 17.30, 8.06, 8.03, 7.54, 5.98,5.64,
+                               4.76 , 3.75 , 3.027 , 1.39 , 0.349 , 0.33))
+
+# bar plot 
+ggplot(alc_class, aes(x = rel_inf, y = reorder(variable, rel_inf))) +
+  geom_bar(stat = "identity", fill = "blue") +
+  labs( x = "Relative Influence", y = "") 
+
+
+
+```
+
